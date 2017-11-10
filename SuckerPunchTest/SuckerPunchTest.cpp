@@ -2,11 +2,11 @@
 //
 
 #include "stdafx.h"
+#include "SuckerPunchTest.h"
 #include <iostream>
-using namespace std;
 
 
-namespace SuckerPunch
+namespace
 {
 	const int MAX_MEMORY = 2048;
 
@@ -16,32 +16,49 @@ namespace SuckerPunch
 
 	const int BYTES_PER_BLOCK = 32;
 
-	const int USABLE_BYTES_PER_BLOCK = 30;
+	const int USABLE_BYTES_PER_BLOCK = 28;
+
+	const int Q_BYTES_OFFSET = 4;
 }
-
-
-struct Q
-{
-	//32 bytes per block
-	unsigned char IsAllocated = 0;
-	unsigned char TailIndex = 0;
-	unsigned char Memory[30];
-};
 
 Q * Create_Queue()
 {
-	Q* CreatedQ = nullptr;
-	//Look for a Memory block that hasn't been allocated yet
-	for (int i = 0; i < SuckerPunch::MAX_QUEUE_NUM; i++)
-	{
-		Q* IsAQ = reinterpret_cast<Q*>(SuckerPunch::data + i*SuckerPunch::BYTES_PER_BLOCK);
+	return FindUnallocatedQ();
+}
 
-		//if this block hasn't been allocated
-		if (IsAQ && !IsAQ->IsAllocated)
+Q* FindUnallocatedQ()
+{
+	//Find an unallocated Q
+	for (int i = 0; i < MAX_QUEUE_NUM; ++i)
+	{
+		const int QPos = i*BYTES_PER_BLOCK;
+		Q* FoundQ = reinterpret_cast<Q*>(data + QPos);
+
+		if (FoundQ && FoundQ->IsAllocated == 0)
 		{
-			CreatedQ = IsAQ;
-			CreatedQ->IsAllocated = 1;
-			return CreatedQ;
+			FoundQ->IsAllocated = 1;
+			FoundQ->Index = QPos;
+			return FoundQ;
+		}
+	}
+
+	return nullptr;
+}
+
+Q* GetNextQ(Q* q)
+{
+	if (q)
+	{
+		//First, destroy this Q's next Q Block, if it has one
+		if (q->NextQIndex != 0)
+		{
+			Q* FoundQ = reinterpret_cast<Q*>(data + q->NextQIndex);
+
+			//if this Q is allocated, destroy it as well
+			if (FoundQ && FoundQ->IsAllocated)
+			{
+				return FoundQ;
+			}
 		}
 	}
 
@@ -50,36 +67,101 @@ Q * Create_Queue()
 
 void Destroy_Queue(Q* q)
 {
-	memset(q, 0, sizeof(Q));
-}
-
-void Enqueue_Byte(Q* q, unsigned char b)
-{
-	//if the Q is not allocated, return
 	if (!q || !q->IsAllocated)
 	{
 		return;
 	}
 
-	q->Memory[q->TailIndex] = b;
-	q->TailIndex++;
+	Q* NextQ = GetNextQ(q);
+
+	if (NextQ)
+	{
+		Destroy_Queue(NextQ);
+	}
+
+	//Then destroy this Q block
+	memset(q, 0, BYTES_PER_BLOCK);
+
+	//set this Q to null
+	q = nullptr;
+}
+
+void Enqueue_Byte(Q* q, unsigned char b)
+{
+	if (!q || !q->IsAllocated)
+	{
+		return;
+	}
+
+	//If we haven't used all of the usable bytes of memory on this Q, just add the byte to the end of this Q
+	if (q->MemorySize < USABLE_BYTES_PER_BLOCK)
+	{
+		q->Memory[q->MemorySize] = b;
+		q->MemorySize++;
+	}
+	else
+	{
+		//See if we have a next Q, enqueue the byte to that one if we do
+		Q* NextQ = GetNextQ(q);
+
+		if (NextQ)
+		{
+			Enqueue_Byte(NextQ, b);
+		}
+		//We have not yet allocated a new block for more memory, so let's do that, and enqueue the byte on it
+		else
+		{
+			//Find a new block
+			Q* NewNextQ = FindUnallocatedQ();
+
+			if (NewNextQ)
+			{
+				//Enqueue the byte on that one
+				q->NextQIndex = NewNextQ->Index;
+				Enqueue_Byte(NewNextQ, b);
+			}
+		}
+	}
 }
 
 unsigned char Dequeue_Byte(Q * q)
 {
-	//if the Q is not allocated, return
 	if (!q || !q->IsAllocated)
 	{
-		return 0;
+		return '\0';
 	}
 
-	unsigned char PoppedChar = q->Memory[0];
+	//Pop the byte into the return
+	unsigned char ReturnChar = '\0';
 
-	memmove(q->Memory, q->Memory+1, sizeof(unsigned char) * (q->TailIndex));
+	ReturnChar = q->Memory[0];
 
-	q->TailIndex--;
+	//move the other 27 bytes over to the left by 1
+	memmove(q->Memory, q->Memory + 1, sizeof(unsigned char)*(USABLE_BYTES_PER_BLOCK - 1));
 
-	return PoppedChar;
+	//Decrement memory size
+	q->MemorySize--;
+
+	Q* NextQ = GetNextQ(q);
+
+	//if we have a next Q block
+	if (NextQ)
+	{
+		//The last byte in this Q's memory should be set to the first one in the next Q
+		//And do the memory shift on the next Q as well
+		q->Memory[USABLE_BYTES_PER_BLOCK - 1] = Dequeue_Byte(NextQ);
+		
+		//If the next Q now has an empty memory, destroy it
+		if (NextQ->MemorySize)
+		{
+			Destroy_Queue(NextQ);
+			
+			//We now no longer have a next Q
+			q->NextQIndex = 0;
+		}
+	}
+
+	return ReturnChar;
 }
 
 void on_out_of_memory()
@@ -94,56 +176,45 @@ void on_illegal_operation()
 
 void Print_Queue(Q* q)
 {
-	for (int i = 0; i < SuckerPunch::USABLE_BYTES_PER_BLOCK; ++i)
+	if (q == nullptr)
 	{
-		if (q->Memory[i])
-		{
-			printf("%c\n", q->Memory[i]);
-		}
-		else
-		{
-			break;
-		}
+		return;
+	}
+
+	//std::printf((char*)q->Memory);
+
+	for (int i = 0; i < q->MemorySize; ++i)
+	{
+		std::cout << q->Memory[i];
+		
+		//printf("%c\n", q->Memory[i]);
 	}
 }
 
 int main()
 {
-	printf("%d %d", sizeof(Q*), sizeof(unsigned char));
 
 	Q* NewQ = Create_Queue();
 
-	Enqueue_Byte(NewQ, 'B');
-	Enqueue_Byte(NewQ, 'O');
-	Enqueue_Byte(NewQ, 'O');
-	Enqueue_Byte(NewQ, 'B');
-	Enqueue_Byte(NewQ, 'S');
 
+	for (int i = 0; i < 70; ++i)
+	{
+		Enqueue_Byte(NewQ, 1 + i);
+	}
+	
 
-	Q* NewQu = Create_Queue();
+	Print_Queue(NewQ);
 
-	Enqueue_Byte(NewQu, 'F');
-	Enqueue_Byte(NewQu, 'U');
-	Enqueue_Byte(NewQu, 'C');
-	Enqueue_Byte(NewQu, 'K');
-	Enqueue_Byte(NewQu, ' ');
-	Enqueue_Byte(NewQu, 'Y');
-	Enqueue_Byte(NewQu, 'O');
-	Enqueue_Byte(NewQu, 'U');
+	std::cout << "\n";
 
-	unsigned char F = Dequeue_Byte(NewQu);
-	unsigned char U = Dequeue_Byte(NewQu);
-	unsigned char C = Dequeue_Byte(NewQu);
-	unsigned char K = Dequeue_Byte(NewQu);
+	for (int i = 0; i < 64; ++i)
+	{
+		std::cout << data[i];
+	}
 
-	Destroy_Queue(NewQu);
+	Destroy_Queue(NewQ);
 
-	printf("%c%c%c%c\n", F, U, C, K);
+	system("pause");
 
-	char i;
-
-	cin >> i;
-
-	cout << "The value you entered is " << i;
     return 0;
 }
