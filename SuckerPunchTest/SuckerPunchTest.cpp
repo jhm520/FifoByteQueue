@@ -132,15 +132,15 @@ unsigned char Dequeue_Byte(Q * q)
 	}
 
 	//Pop the byte into the return
-	unsigned char ReturnChar = '\0';
-
-	ReturnChar = q->Memory[0];
+	unsigned char ReturnChar = q->Memory[0];
 
 	//move the other 27 bytes over to the left by 1
 	memmove(q->Memory, q->Memory + 1, sizeof(unsigned char)*(USABLE_BYTES_PER_BLOCK - 1));
 
 	//Decrement memory size
 	q->MemorySize--;
+
+	q->Memory[q->MemorySize] = 0;
 
 	Q* NextQ = GetNextQ(q);
 
@@ -152,11 +152,11 @@ unsigned char Dequeue_Byte(Q * q)
 		q->Memory[USABLE_BYTES_PER_BLOCK - 1] = Dequeue_Byte(NextQ);
 		
 		//If the next Q now has an empty memory, destroy it
-		if (NextQ->MemorySize)
+		if (NextQ->MemorySize == 0)
 		{
 			Destroy_Queue(NextQ);
 			
-			//We now no longer have a next Q
+			//We now no longer have a next Q, set the index to 0
 			q->NextQIndex = 0;
 		}
 	}
@@ -207,9 +207,9 @@ int main()
 
 	std::cout << "\n";
 
-	for (int i = 0; i < 64; ++i)
+	for (int i = 0; i < 70; ++i)
 	{
-		std::cout << data[i];
+		std::cout << Dequeue_Byte(NewQ);
 	}
 
 	Destroy_Queue(NewQ);
